@@ -24,51 +24,59 @@ if 'analysis_report' not in st.session_state:
     st.session_state.analysis_report = None
 
 # --- 함수 정의 ---
-def get_school_info(school_name):
-    """학교알리미 API 호출 및 상세 에러 처리"""
-    url = "https://www.schoolinfo.go.kr/openApi/api/school/baseInfo.do"
+def get_school_info_neis(school_name):
+    # 나이스 Open API 학교기본정보 주소 (반드시 https 확인)
+    url = "https://open.neis.go.kr/hub/schoolInfo"
     params = {
-        'apiKey': SCHOOL_API_KEY,
-        's_schul_nm': school_name,
-        'format': 'json'
+        'KEY': NEIS_API_KEY,
+        'Type': 'json',
+        'pIndex': 1,
+        'pSize': 5,
+        'SCHUL_NM': school_name
     }
 
     try:
         response = requests.get(url, params=params, timeout=10)
         
-        # 1. HTTP 응답 상태 확인 (200이 아니면 서버 문제)
+        # [단계 1] HTTP 상태 코드 확인
         if response.status_code != 200:
-            st.error(f"서버 응답 오류 (HTTP {response.status_code})")
+            st.error(f"서버 연결 실패! (HTTP 코드: {response.status_code})")
             return None
 
-        # 2. JSON 파싱 시도 및 예외 처리
+        # [단계 2] 응답 내용이 비었는지 확인
+        if not response.text.strip():
+            st.error("서버에서 빈 응답을 보냈습니다.")
+            return None
+
+        # [단계 3] JSON 파싱 시도
         try:
             res_data = response.json()
-        except ValueError:
-            st.error("API가 정상적인 데이터를 반환하지 않았습니다. (JSON 파싱 실패)")
-            with st.expander("상세 응답 내용 내용 확인 (디버깅)"):
-                st.text(response.text) # 실제 어떤 메시지가 왔는지 출력
+        except ValueError as e:
+            st.error("⚠️ API가 데이터 대신 HTML/텍스트를 보냈습니다. (JSON 파싱 실패)")
+            with st.expander("실제 서버 응답 내용 보기"):
+                st.code(response.text) # 에러 메시지 원문을 보여줌
             return None
         
-        # 3. 데이터 구조 확인 (학교알리미 API 특유의 키값 확인)
-        if 'list' in res_data and len(res_data['list']) > 0:
-            info = res_data['list'][0]
-            # API 가이드에 따른 정확한 필드명 매핑 (SCHUL_NM, ADRES 등)
+        # [단계 4] 데이터 추출
+        if 'schoolInfo' in res_data:
+            info = res_data['schoolInfo'][1]['row'][0]
             return {
-                "name": info.get("SCHUL_NM", school_name),
-                "address": info.get("ADRES", "정보 없음"),
-                "total_students": info.get("USER_CON_3", "0"), 
-                "teacher_count": info.get("USER_CON_5", "0"),
-                "found_date": info.get("FOND_DE", "정보 없음"),
-                "raw_data": info 
+                "name": info.get("SCHUL_NM"),
+                "address": info.get("ORG_RDNMA"),
+                "found_date": info.get("FOND_DE"),
+                "raw_data": info
             }
         else:
-            st.warning(f"'{school_name}'으로 검색된 결과가 없습니다.")
+            # 나이스 API 자체 에러 메시지 처리 (키 미승인 등)
+            if 'RESULT' in res_data:
+                msg = res_data['RESULT'].get('MESSAGE', '알 수 없는 오류')
+                st.warning(f"API 알림: {msg}")
             return None
 
     except Exception as e:
-        st.error(f"네트워크 오류 발생: {e}")
+        st.error(f"요청 중 심각한 오류 발생: {e}")
         return None
+
 
 
 def analyze_school(data):
