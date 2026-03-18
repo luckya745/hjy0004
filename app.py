@@ -15,7 +15,7 @@ except (KeyError, FileNotFoundError):
 
 # Gemini 설정 (최신 안정화 모델 사용)
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash') # 2.5 대신 현재 안정 버전인 1.5 사용 권장
+model = genai.GenerativeModel('gemini-2.5-flash') # 2.5 대신 현재 안정 버전인 1.5 사용 권장
 
 # 세션 상태 초기화
 if 'school_data' not in st.session_state:
