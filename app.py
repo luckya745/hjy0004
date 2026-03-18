@@ -25,7 +25,7 @@ if 'analysis_report' not in st.session_state:
 
 # --- 함수 정의 ---
 def get_school_info(school_name):
-    """학교알리미 API를 호출하여 학교 기본 정보를 가져옵니다."""
+    """학교알리미 API 호출 및 상세 에러 처리"""
     url = "https://www.schoolinfo.go.kr/openApi/api/school/baseInfo.do"
     params = {
         'apiKey': SCHOOL_API_KEY,
@@ -35,26 +35,41 @@ def get_school_info(school_name):
 
     try:
         response = requests.get(url, params=params, timeout=10)
-        res_data = response.json()
         
-        # 실제 데이터 구조에 맞게 파싱 (예시: 첫 번째 검색 결과 반환)
+        # 1. HTTP 응답 상태 확인 (200이 아니면 서버 문제)
+        if response.status_code != 200:
+            st.error(f"서버 응답 오류 (HTTP {response.status_code})")
+            return None
+
+        # 2. JSON 파싱 시도 및 예외 처리
+        try:
+            res_data = response.json()
+        except ValueError:
+            st.error("API가 정상적인 데이터를 반환하지 않았습니다. (JSON 파싱 실패)")
+            with st.expander("상세 응답 내용 내용 확인 (디버깅)"):
+                st.text(response.text) # 실제 어떤 메시지가 왔는지 출력
+            return None
+        
+        # 3. 데이터 구조 확인 (학교알리미 API 특유의 키값 확인)
         if 'list' in res_data and len(res_data['list']) > 0:
             info = res_data['list'][0]
-            # API 반환 필드명에 맞춰 수정이 필요할 수 있습니다.
+            # API 가이드에 따른 정확한 필드명 매핑 (SCHUL_NM, ADRES 등)
             return {
                 "name": info.get("SCHUL_NM", school_name),
                 "address": info.get("ADRES", "정보 없음"),
-                "total_students": info.get("USER_CON_3", "0"), # 예시 필드명
+                "total_students": info.get("USER_CON_3", "0"), 
                 "teacher_count": info.get("USER_CON_5", "0"),
                 "found_date": info.get("FOND_DE", "정보 없음"),
-                "raw_data": info # AI 분석용 전체 데이터
+                "raw_data": info 
             }
         else:
-            st.warning("검색된 학교가 없습니다.")
+            st.warning(f"'{school_name}'으로 검색된 결과가 없습니다.")
             return None
+
     except Exception as e:
-        st.error(f"데이터 수집 중 오류 발생: {e}")
+        st.error(f"네트워크 오류 발생: {e}")
         return None
+
 
 def analyze_school(data):
     """Gemini를 이용한 SWOT 분석 및 컨설팅 전략 생성"""
