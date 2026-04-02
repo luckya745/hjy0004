@@ -2,13 +2,11 @@ import streamlit as st
 import google.generativeai as genai
 
 # --- 1. 환경 설정 및 보안 (Secrets 활용) ---
-# 이 부분은 소스 코드에 키를 노출하지 않고 금고(Secrets)에서 꺼내오는 역할을 합니다.
 try:
-    # Streamlit Secrets에서 API 키 로드
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=GEMINI_API_KEY)
 except (KeyError, FileNotFoundError):
-    st.error("⚠️ API 키를 찾을 수 없습니다. '.streamlit/secrets.toml' 파일이나 Streamlit Cloud의 Secrets 설정을 확인해주세요.")
+    st.error("⚠️ API 키를 찾을 수 없습니다. Secrets 설정을 확인해주세요.")
     st.stop()
 
 # --- 2. 역사 인물 데이터베이스 ---
@@ -31,69 +29,72 @@ HISTORICAL_FIGURES = {
 st.set_page_config(page_title="역사 인물 대화 AI", page_icon="📜", layout="wide")
 
 st.title("📜 역사 인물과 나누는 대화")
-st.caption("안전하게 설정된 API 키를 사용하여 역사 속 인물과 대화합니다.")
+st.caption("이전에 나눈 대화는 인물을 변경해도 유지되며, 다시 불러옵니다.")
 
-# 사이드바: 인물 선택 및 관리
+# --- 4. 세션 상태 관리 (캐싱 로직) ---
+# 모든 인물의 대화 데이터를 저장할 저장소 생성
+if "history_storage" not in st.session_state:
+    st.session_state.history_storage = {} # { "인물명": {"messages": [], "chat_session": session_obj} }
+
+# 사이드바: 인물 선택
 with st.sidebar:
     st.header("👤 인물 선택")
     selected_name = st.selectbox("대화하고 싶은 인물을 선택하세요:", list(HISTORICAL_FIGURES.keys()))
     
     st.divider()
-    if st.button("대화 초기화", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.chat_session = None
+    if st.button("현재 인물 대화 초기화", use_container_width=True):
+        if selected_name in st.session_state.history_storage:
+            del st.session_state.history_storage[selected_name]
         st.rerun()
-    
-    st.info("💡 API 키는 Streamlit Secrets를 통해 안전하게 보호되고 있습니다.")
 
-# --- 4. 세션 상태 관리 (인물 변경 감지 및 초기화) ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# 인물이 바뀌면 대화 내용과 세션을 초기화합니다.
-if "current_figure" not in st.session_state or st.session_state.current_figure != selected_name:
-    st.session_state.current_figure = selected_name
-    st.session_state.messages = [] 
-    
-    # 선택된 인물에 맞춘 시스템 명령(Persona) 생성
+# --- 5. 인물별 데이터 호출 및 초기화 로직 ---
+# 선택된 인물의 데이터가 저장소에 없다면 새로 생성 (최초 1회만 실행)
+if selected_name not in st.session_state.history_storage:
     persona_instruction = (
         f"당신은 역사 속 인물 '{selected_name}'입니다. "
-        f"다음 설명에 따라 대화하십시오: {HISTORICAL_FIGURES[selected_name]} "
-        "상대방은 당신에 대해 배우고 싶어 하는 현대의 학습자입니다. "
-        "고풍스러운 말투를 사용하되 지식을 친절하게 전달하십시오."
+        f"설명: {HISTORICAL_FIGURES[selected_name]} "
+        "고풍스러운 말투를 사용하되 학습자에게 친절하게 대하십시오."
     )
     
-    # 모델 인스턴스 생성
-    st.session_state.model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash-lite",
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
         system_instruction=persona_instruction
     )
-    # 채팅 세션 시작
-    st.session_state.chat_session = st.session_state.model.start_chat(history=[])
+    
+    # 해당 인물의 초기 상태 저장
+    st.session_state.history_storage[selected_name] = {
+        "messages": [],
+        "chat_session": model.start_chat(history=[])
+    }
 
-# --- 5. 채팅 화면 구현 ---
+# 현재 활성화된 대화 데이터 가져오기 (재호출 로직)
+current_data = st.session_state.history_storage[selected_name]
+current_messages = current_data["messages"]
+current_chat_session = current_data["chat_session"]
+
+# --- 6. 채팅 화면 구현 ---
 st.subheader(f"✨ {selected_name}님과의 대화")
 
-# 기존 대화 표시
-for message in st.session_state.messages:
+# 기존에 나눴던 대화 목록 표시 (이미 나왔던 자료 재호출)
+for message in current_messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
 # 사용자 입력 처리
-if prompt := st.chat_input(f"{selected_name}님께 궁금한 점을 여쭤보세요."):
+if prompt := st.chat_input(f"{selected_name}님께 여쭤보세요."):
     # 사용자 메시지 화면 표시 및 저장
     st.chat_message("user").markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    current_messages.append({"role": "user", "content": prompt})
 
     try:
-        # Gemini API를 통해 응답 생성
-        response = st.session_state.chat_session.send_message(prompt)
+        # API 호출 및 응답 생성
+        response = current_chat_session.send_message(prompt)
         ai_response = response.text
 
         # AI 메시지 화면 표시 및 저장
         with st.chat_message("assistant"):
             st.markdown(ai_response)
-        st.session_state.messages.append({"role": "assistant", "content": ai_response})
+        current_messages.append({"role": "assistant", "content": ai_response})
         
     except Exception as e:
-        st.error(f"대화 중 오류가 발생했습니다. API 키 권한이나 네트워크를 확인해주세요. 상세오류: {e}")
+        st.error(f"오류가 발생했습니다: {e}")
