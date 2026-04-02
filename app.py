@@ -1,166 +1,94 @@
 import streamlit as st
-import requests
-import pandas as pd
 import google.generativeai as genai
 
 # --- 환경 설정 및 보안 ---
-# Streamlit Cloud 배포 시 설정 메뉴의 Secrets에 키를 입력해야 합니다.
-# 로컬 실행 시에는 .streamlit/secrets.toml 파일을 생성하세요.
 try:
-    SCHOOL_API_KEY = st.secrets["SCHOOL_API_KEY"]
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except (KeyError, FileNotFoundError):
-    st.error("API 키를 찾을 수 없습니다. Secrets 설정을 확인해주세요.")
+    st.error("API 키를 찾을 수 없습니다. Streamlit Secrets 설정을 확인해주세요.")
     st.stop()
 
-# Gemini 설정 (최신 안정화 모델 사용)
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash') # 2.5 대신 현재 안정 버전인 1.5 사용 권장
 
-# 세션 상태 초기화
-if 'school_data' not in st.session_state:
-    st.session_state.school_data = None
-if 'analysis_report' not in st.session_state:
-    st.session_state.analysis_report = None
-
-# --- 함수 정의 ---
-def get_school_info_neis(school_name):
-    # 1. API 엔드포인트 및 파라미터 설정
-    url = "https://open.neis.go.kr/hub/schoolInfo"
-    params = {
-        'KEY': NEIS_API_KEY,
-        'Type': 'json',
-        'pIndex': 1,
-        'pSize': 5,
-        'SCHUL_NM': school_name
-    }
-    
-    # 2. 브라우저인 것처럼 속이는 헤더 추가 (매우 중요)
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-
-    try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        
-        # [단계 1] 응답이 성공(200)인지 확인
-        if response.status_code != 200:
-            st.error(f"🌐 서버 연결 실패 (HTTP {response.status_code})")
-            return None
-
-        # [단계 2] 응답이 JSON인지 확인
-        content_type = response.headers.get('Content-Type', '')
-        if 'application/json' not in content_type:
-            st.error("⚠️ 데이터 형식이 JSON이 아닙니다.")
-            with st.expander("응답 원문 확인 (서버에서 보낸 내용)"):
-                st.code(response.text)
-            return None
-
-        # [단계 3] JSON 파싱
-        try:
-            res_data = response.json()
-        except ValueError:
-            st.error("데이터 파싱 중 오류가 발생했습니다.")
-            return None
-        
-        # [단계 4] 나이스 API의 고유 에러 메시지 처리
-        if 'schoolInfo' in res_data:
-            info = res_data['schoolInfo'][1]['row'][0]
-            return {
-                "name": info.get("SCHUL_NM"),
-                "address": info.get("ORG_RDNMA"),
-                "found_date": info.get("FOND_DE"),
-                "raw_data": info
-            }
-        elif 'RESULT' in res_data:
-            # 키가 없거나 데이터가 없는 경우
-            msg = res_data['RESULT'].get('MESSAGE', '데이터가 없습니다.')
-            st.warning(f"💡 API 안내: {msg}")
-            return None
-        else:
-            st.error("알 수 없는 데이터 구조입니다.")
-            return None
-
-    except Exception as e:
-        st.error(f"❌ 요청 중 오류 발생: {e}")
-        return None
-
-
-
-def analyze_school(data):
-    """Gemini를 이용한 SWOT 분석 및 컨설팅 전략 생성"""
-    prompt = f"""
-    당신은 교육 행정 전문가이자 학교 컨설턴트입니다. 
-    다음 학교 데이터를 바탕으로 상세한 SWOT 분석과 학교 발전 전략을 제안하세요.
-    
-    [학교 데이터]
-    {data}
-    
-    [요구사항]
-    1. 강점(S), 약점(W), 기회(O), 위협(T)을 구체적으로 분석할 것.
-    2. 데이터 기반의 실무적인 교육과정 개선안을 제안할 것.
-    3. 가독성을 위해 마크다운 형식으로 작성할 것.
-    """
-    response = model.generate_content(prompt)
-    return response.text
+# --- 역사 인물 데이터베이스 (페르소나 설정) ---
+HISTORICAL_FIGURES = {
+    "단군왕검": "고조선의 건국 시조. 홍익인간(널리 인간을 이롭게 함)의 정신을 강조하며 인자하고 신비로운 신화적 지도자의 말투를 사용하십시오.",
+    "주몽 (동명성왕)": "고구려의 건국 시조. 활쏘기의 명수이자 강인한 기상을 가진 정복 군주의 말투를 사용하십시오. '천제의 아들'이라는 자부심이 느껴져야 합니다.",
+    "온조": "백제의 건국 시조. 고구려를 떠나 새로운 터전을 잡은 온화하면서도 결단력 있는 개척자의 말투를 사용하십시오.",
+    "박혁거세": "신라의 건국 시조. 알에서 태어난 신비로움과 밝은 빛으로 세상을 다스리는 평화로운 군주의 말투를 사용하십시오.",
+    "김수로": "금관가야의 건국 시조. 철기 문화의 자부심과 바다 건너 허황옥과의 사랑을 간직한 낭만적이면서도 강력한 족장의 말투를 사용하십시오.",
+    "왕건 (태조)": "고려의 건국 시조. 후삼국을 통일한 포용력과 '훈요십조'를 강조하는 지혜로운 군주의 말투를 사용하십시오. 호족들을 아우르는 부드러운 카리스마가 필요합니다.",
+    "견훤": "후백제의 견훤. 용맹하고 거침없는 무장의 기질과 아들들에 대한 복잡한 심경, 고려에 대한 경쟁심이 드러나는 강한 말투를 사용하십시오.",
+    "궁예": "후고구려의 궁예. 관심법을 강조하며 스스로를 미륵불이라 칭하는 위압적이고 독특한 말투를 사용하십시오. '누가 기침 소리를 내었는가'와 같은 단호함이 특징입니다.",
+    "이성계 (태조)": "조선의 건국 시조. 위화도 회군을 결정한 결단력과 명궁의 실력, 새로운 나라를 세운 창업 군주의 묵직한 말투를 사용하십시오.",
+    "이순신": "조선의 수군통제사. 위엄 있고 단호하며 백성을 사랑하는 충심 가득한 말투를 사용하십시오. '필사즉생 필생즉사'의 정신이 느껴져야 합니다.",
+    "고종 황제": "대한제국의 초대 황제. 구한말의 혼란 속에서 근대화를 꿈꾸고 국권을 지키려 했던 고뇌하는 황제의 말투를 사용하십시오.",
+    "김구": "대한민국 임시정부 주석. '나의 소원'에서 밝힌 높은 문화의 힘을 강조하며, 독립을 향한 일편단심과 인자한 '백범'의 말투를 사용하십시오."
+}
 
 # --- UI 레이아웃 ---
-st.set_page_config(page_title="스쿨 인사이트 AI", layout="wide", page_icon="🏫")
+st.set_page_config(page_title="역사 인물 대화 AI", page_icon="📜", layout="wide")
 
-st.title("🏫 스쿨 인사이트 AI")
-st.caption("학교 알리미 데이터 기반 AI 심층 컨설팅 리포트")
+st.title("📜 역사 인물과 나누는 대화")
+st.caption("공부하고 싶은 인물을 선택하고, 그 인물과 직접 대화하며 역사를 배워보세요.")
 
-# 사이드바: 검색 및 설정
+# 사이드바에서 인물 선택
 with st.sidebar:
-    st.header("🔍 학교 검색")
-    target = st.text_input("분석할 학교명을 입력하세요", placeholder="예: 신광중학교")
+    st.header("👤 인물 선택")
+    selected_name = st.selectbox("대화하고 싶은 인물을 선택하세요:", list(HISTORICAL_FIGURES.keys()))
     
-    if st.button("데이터 수집 시작", use_container_width=True):
-        if target:
-            with st.spinner("학교 정보를 불러오는 중..."):
-                result = get_school_info(target)
-                if result:
-                    st.session_state.school_data = result
-                    st.session_state.analysis_report = None # 새로운 검색 시 이전 분석 삭제
-                    st.success("데이터 로드 완료!")
-        else:
-            st.warning("학교명을 입력해 주세요.")
-
-# 메인 화면: 데이터 표시 및 분석
-if st.session_state.school_data:
-    data = st.session_state.school_data
-    
-    # 1. 학교 기본 정보 대시보드
-    st.subheader(f"📊 {data['name']} 핵심 지표")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("설립일", data['found_date'])
-    with col2:
-        st.metric("주소", data['address'][:15] + "...")
-    with col3:
-        st.info(f"💡 학교 기본 정보를 성공적으로 수집했습니다.")
-
     st.divider()
+    if st.button("대화 초기화"):
+        st.session_state.messages = []
+        st.session_state.chat_session = None
+        st.rerun()
 
-    # 2. AI 분석 실행 섹션
-    if st.button("🚀 AI 전문가 심층 분석 실행", type="primary"):
-        with st.spinner("전문가 AI가 데이터를 분석하고 있습니다..."):
-            report = analyze_school(data['raw_data'])
-            st.session_state.analysis_report = report
+# --- 세션 상태 초기화 ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    # 3. 분석 결과 출력
-    if st.session_state.analysis_report:
-        st.markdown("---")
-        st.markdown("### 📝 AI 컨설팅 리포트")
-        st.markdown(st.session_state.analysis_report)
+# 인물이 바뀌면 채팅 세션 초기화
+if "current_figure" not in st.session_state or st.session_state.current_figure != selected_name:
+    st.session_state.current_figure = selected_name
+    st.session_state.messages = [] # 인물 변경 시 대화 내역 삭제 (혼란 방지)
+    
+    # 새로운 인물에 맞는 시스템 인스트럭션으로 모델 설정
+    persona_instruction = (
+        f"당신은 역사 속 인물 '{selected_name}'입니다. "
+        f"다음 설명에 따라 대화하십시오: {HISTORICAL_FIGURES[selected_name]} "
+        "상대방은 당신에 대해 배우고 싶어 하는 현대의 학습자입니다. "
+        "당시의 시대적 배경을 바탕으로 고풍스러운 말투를 사용하되, 내용은 유익해야 합니다."
+    )
+    
+    st.session_state.model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        system_instruction=persona_instruction
+    )
+    st.session_state.chat_session = st.session_state.model.start_chat(history=[])
+
+# --- 채팅 화면 구현 ---
+st.subheader(f"✨ {selected_name}님과의 대화")
+
+# 기존 대화 표시
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# 사용자 입력 처리
+if prompt := st.chat_input(f"{selected_name}님께 질문해보세요."):
+    # 사용자 메시지 표시
+    st.chat_message("user").markdown(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    try:
+        # AI 응답 생성
+        response = st.session_state.chat_session.send_message(prompt)
+        ai_response = response.text
+
+        # AI 메시지 표시
+        with st.chat_message("assistant"):
+            st.markdown(ai_response)
+        st.session_state.messages.append({"role": "assistant", "content": ai_response})
         
-        # 리포트 다운로드 기능
-        st.download_button(
-            label="📄 리포트 파일로 저장 (TXT)",
-            data=st.session_state.analysis_report,
-            file_name=f"{data['name']}_컨설팅_리포트.txt",
-            mime="text/plain"
-        )
-else:
-    st.info("왼쪽 사이드바에서 학교명을 입력하고 '데이터 수집 시작'을 눌러주세요.")
+    except Exception as e:
+        st.error(f"대화 중 오류가 발생했습니다: {e}")
